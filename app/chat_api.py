@@ -5,7 +5,8 @@ Refactored for Vercel deployment
 
 from flask import Flask, request, jsonify, Response, stream_with_context
 from flask_cors import CORS
-from openai import OpenAI
+from flask_cors import CORS
+import requests
 import os
 import json
 from dotenv import load_dotenv
@@ -44,14 +45,9 @@ def init_db():
 init_db()
 
 # Initialize OpenAI client with OpenRouter
-client = OpenAI(
-    base_url="https://openrouter.ai/api/v1",
-    api_key=os.getenv("OPENROUTER_API_KEY"),
-    default_headers={
-        "HTTP-Referer": "https://buddy-tools.vercel.app",
-        "X-Title": "Buddy Tools"
-    }
-)
+# Using requests directly for better control
+OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
+OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
 
 # System message for the assistant
 SYSTEM_MESSAGE = {
@@ -61,7 +57,7 @@ SYSTEM_MESSAGE = {
 
 @app.route('/api/chat', methods=['POST'])
 def chat_stream():
-    """Streaming chat endpoint with GPT-4o"""
+    """Streaming chat endpoint with GPT-4o via OpenRouter"""
     try:
         data = request.json
         message = data.get('message', '').strip()
@@ -77,17 +73,53 @@ def chat_stream():
         
         def generate():
             try:
-                # Stream the response with GPT-4o
-                stream = client.chat.completions.create(
-                    model="openai/gpt-4o",
-                    messages=messages,
+                import requests
+                
+                headers = {
+                    "Authorization": f"Bearer {OPENROUTER_API_KEY}",
+                    "Content-Type": "application/json",
+                    "HTTP-Referer": "https://buddy-tools.vercel.app",
+                    "X-Title": "Buddy Tools"
+                }
+                
+                payload = {
+                    "model": "openai/gpt-4o",
+                    "messages": messages,
+                    "stream": True
+                }
+                
+                # Make streaming request to OpenRouter
+                response = requests.post(
+                    OPENROUTER_URL,
+                    headers=headers,
+                    json=payload,
                     stream=True
                 )
                 
-                for chunk in stream:
-                    if chunk.choices[0].delta.content:
-                        content = chunk.choices[0].delta.content
-                        yield f"data: {json.dumps({'content': content, 'done': False})}\n\n"
+                if response.status_code != 200:
+                    error_msg = f"OpenRouter API Error: {response.status_code} - {response.text}"
+                    print(error_msg)
+                    yield f"data: {json.dumps({'error': error_msg, 'done': True})}\n\n"
+                    return
+
+                # Process the stream
+                for line in response.iter_lines():
+                    if line:
+                        line = line.decode('utf-8')
+                        if line.startswith('data: '):
+                            data_str = line[6:]
+                            if data_str == '[DONE]':
+                                break
+                            
+                            try:
+                                chunk = json.loads(data_str)
+                                if 'choices' in chunk and len(chunk['choices']) > 0:
+                                    delta = chunk['choices'][0].get('delta', {})
+                                    if 'content' in delta:
+                                        content = delta['content']
+                                        yield f"data: {json.dumps({'content': content, 'done': False})}\n\n"
+                            except json.JSONDecodeError:
+                                continue
                 
                 # Send completion signal
                 yield f"data: {json.dumps({'content': '', 'done': True})}\n\n"
