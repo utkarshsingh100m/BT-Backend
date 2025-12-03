@@ -46,7 +46,11 @@ init_db()
 # Initialize OpenAI client with OpenRouter
 client = OpenAI(
     base_url="https://openrouter.ai/api/v1",
-    api_key=os.getenv("OPENROUTER_API_KEY")
+    api_key=os.getenv("OPENROUTER_API_KEY"),
+    default_headers={
+        "HTTP-Referer": "https://buddy-tools.vercel.app",
+        "X-Title": "Buddy Tools"
+    }
 )
 
 # System message for the assistant
