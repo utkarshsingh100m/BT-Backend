@@ -97,7 +97,10 @@ def chat_stream():
             mimetype='text/event-stream',
             headers={
                 'Cache-Control': 'no-cache',
-                'X-Accel-Buffering': 'no'
+                'X-Accel-Buffering': 'no',
+                'Access-Control-Allow-Origin': '*',
+                'Access-Control-Allow-Methods': 'POST, OPTIONS',
+                'Access-Control-Allow-Headers': 'Content-Type'
             }
         )
         
