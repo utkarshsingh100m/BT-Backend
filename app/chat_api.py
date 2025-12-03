@@ -82,28 +82,70 @@ def chat_stream():
                     "X-Title": "Buddy Tools"
                 }
                 
-                payload = {
-                    "model": "openai/gpt-4o",
+                # Step 1: First API call with reasoning (Non-streaming)
+                # We use the user's requested logic to "think" first
+                payload_1 = {
+                    "model": "openai/gpt-oss-20b:free",
                     "messages": messages,
-                    "stream": True
+                    "reasoning": {"enabled": True}
                 }
                 
-                # Make streaming request to OpenRouter
-                response = requests.post(
+                # print("Step 1: Initial reasoning...")
+                response_1 = requests.post(
                     OPENROUTER_URL,
                     headers=headers,
-                    json=payload,
-                    stream=True
+                    json=payload_1
                 )
                 
-                if response.status_code != 200:
-                    error_msg = f"OpenRouter API Error: {response.status_code} - {response.text}"
+                if response_1.status_code != 200:
+                    error_msg = f"OpenRouter API Error (Step 1): {response_1.status_code} - {response_1.text}"
                     print(error_msg)
                     yield f"data: {json.dumps({'error': error_msg, 'done': True})}\n\n"
                     return
 
-                # Process the stream
-                for line in response.iter_lines():
+                resp_json_1 = response_1.json()
+                if 'choices' not in resp_json_1 or not resp_json_1['choices']:
+                    yield f"data: {json.dumps({'error': 'No response from AI', 'done': True})}\n\n"
+                    return
+                    
+                msg_1 = resp_json_1['choices'][0]['message']
+                
+                # Step 2: Second API call - "Are you sure? Think carefully."
+                # We pass back the reasoning details if available
+                
+                # Construct new messages list with the first response
+                messages_2 = messages + [
+                    {
+                        "role": "assistant",
+                        "content": msg_1.get('content'),
+                        "reasoning_details": msg_1.get('reasoning_details')
+                    },
+                    {"role": "user", "content": "Are you sure? Think carefully."}
+                ]
+                
+                payload_2 = {
+                    "model": "openai/gpt-oss-20b:free",
+                    "messages": messages_2,
+                    "reasoning": {"enabled": True},
+                    "stream": True
+                }
+                
+                # print("Step 2: Refined response...")
+                response_2 = requests.post(
+                    OPENROUTER_URL,
+                    headers=headers,
+                    json=payload_2,
+                    stream=True
+                )
+                
+                if response_2.status_code != 200:
+                    error_msg = f"OpenRouter API Error (Step 2): {response_2.status_code} - {response_2.text}"
+                    print(error_msg)
+                    yield f"data: {json.dumps({'error': error_msg, 'done': True})}\n\n"
+                    return
+
+                # Process the stream from the second call
+                for line in response_2.iter_lines():
                     if line:
                         line = line.decode('utf-8')
                         if line.startswith('data: '):
