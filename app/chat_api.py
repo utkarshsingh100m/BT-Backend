@@ -57,7 +57,7 @@ SYSTEM_MESSAGE = {
 
 @app.route('/api/chat', methods=['POST'])
 def chat_stream():
-    """Streaming chat endpoint with GPT-4o via OpenRouter"""
+    """Chat endpoint with GPT-4o via OpenRouter (Non-streaming)"""
     try:
         data = request.json
         message = data.get('message', '').strip()
@@ -71,116 +71,76 @@ def chat_stream():
             {"role": "user", "content": message}
         ]
         
-        def generate():
-            try:
-                import requests
-                
-                headers = {
-                    "Authorization": f"Bearer {OPENROUTER_API_KEY}",
-                    "Content-Type": "application/json",
-                    "HTTP-Referer": "https://buddy-tools.vercel.app",
-                    "X-Title": "Buddy Tools"
-                }
-                
-                # Step 1: First API call with reasoning (Non-streaming)
-                # We use the user's requested logic to "think" first
-                payload_1 = {
-                    "model": "openai/gpt-oss-20b:free",
-                    "messages": messages,
-                    "reasoning": {"enabled": True}
-                }
-                
-                # print("Step 1: Initial reasoning...")
-                response_1 = requests.post(
-                    OPENROUTER_URL,
-                    headers=headers,
-                    json=payload_1
-                )
-                
-                if response_1.status_code != 200:
-                    error_msg = f"OpenRouter API Error (Step 1): {response_1.status_code} - {response_1.text}"
-                    print(error_msg)
-                    yield f"data: {json.dumps({'error': error_msg, 'done': True})}\n\n"
-                    return
-
-                resp_json_1 = response_1.json()
-                if 'choices' not in resp_json_1 or not resp_json_1['choices']:
-                    yield f"data: {json.dumps({'error': 'No response from AI', 'done': True})}\n\n"
-                    return
-                    
-                msg_1 = resp_json_1['choices'][0]['message']
-                
-                # Step 2: Second API call - "Are you sure? Think carefully."
-                # We pass back the reasoning details if available
-                
-                # Construct new messages list with the first response
-                messages_2 = messages + [
-                    {
-                        "role": "assistant",
-                        "content": msg_1.get('content'),
-                        "reasoning_details": msg_1.get('reasoning_details')
-                    },
-                    {"role": "user", "content": "Are you sure? Think carefully."}
-                ]
-                
-                payload_2 = {
-                    "model": "openai/gpt-oss-20b:free",
-                    "messages": messages_2,
-                    "reasoning": {"enabled": True},
-                    "stream": True
-                }
-                
-                # print("Step 2: Refined response...")
-                response_2 = requests.post(
-                    OPENROUTER_URL,
-                    headers=headers,
-                    json=payload_2,
-                    stream=True
-                )
-                
-                if response_2.status_code != 200:
-                    error_msg = f"OpenRouter API Error (Step 2): {response_2.status_code} - {response_2.text}"
-                    print(error_msg)
-                    yield f"data: {json.dumps({'error': error_msg, 'done': True})}\n\n"
-                    return
-
-                # Process the stream from the second call
-                for line in response_2.iter_lines():
-                    if line:
-                        line = line.decode('utf-8')
-                        if line.startswith('data: '):
-                            data_str = line[6:]
-                            if data_str == '[DONE]':
-                                break
-                            
-                            try:
-                                chunk = json.loads(data_str)
-                                if 'choices' in chunk and len(chunk['choices']) > 0:
-                                    delta = chunk['choices'][0].get('delta', {})
-                                    if 'content' in delta:
-                                        content = delta['content']
-                                        yield f"data: {json.dumps({'content': content, 'done': False})}\n\n"
-                            except json.JSONDecodeError:
-                                continue
-                
-                # Send completion signal
-                yield f"data: {json.dumps({'content': '', 'done': True})}\n\n"
-                
-            except Exception as e:
-                print(f"Streaming error: {e}")
-                yield f"data: {json.dumps({'error': str(e), 'done': True})}\n\n"
+        import requests
         
-        return Response(
-            stream_with_context(generate()),
-            mimetype='text/event-stream',
-            headers={
-                'Cache-Control': 'no-cache',
-                'X-Accel-Buffering': 'no',
-                'Access-Control-Allow-Origin': '*',
-                'Access-Control-Allow-Methods': 'POST, OPTIONS',
-                'Access-Control-Allow-Headers': 'Content-Type'
-            }
+        headers = {
+            "Authorization": f"Bearer {OPENROUTER_API_KEY}",
+            "Content-Type": "application/json",
+            "HTTP-Referer": "https://buddy-tools.vercel.app",
+            "X-Title": "Buddy Tools"
+        }
+        
+        # Step 1: First API call with reasoning
+        payload_1 = {
+            "model": "openai/gpt-oss-20b:free",
+            "messages": messages,
+            "reasoning": {"enabled": True}
+        }
+        
+        response_1 = requests.post(
+            OPENROUTER_URL,
+            headers=headers,
+            json=payload_1
         )
+        
+        if response_1.status_code != 200:
+            return jsonify({'success': False, 'error': f"OpenRouter API Error (Step 1): {response_1.status_code} - {response_1.text}"}), 500
+
+        resp_json_1 = response_1.json()
+        if 'choices' not in resp_json_1 or not resp_json_1['choices']:
+            return jsonify({'success': False, 'error': 'No response from AI'}), 500
+            
+        msg_1 = resp_json_1['choices'][0]['message']
+        
+        # Step 2: Second API call - "Are you sure? Think carefully."
+        messages_2 = messages + [
+            {
+                "role": "assistant",
+                "content": msg_1.get('content'),
+                "reasoning_details": msg_1.get('reasoning_details')
+            },
+            {"role": "user", "content": "Are you sure? Think carefully."}
+        ]
+        
+        payload_2 = {
+            "model": "openai/gpt-oss-20b:free",
+            "messages": messages_2,
+            "reasoning": {"enabled": True}
+        }
+        
+        response_2 = requests.post(
+            OPENROUTER_URL,
+            headers=headers,
+            json=payload_2
+        )
+        
+        if response_2.status_code != 200:
+            return jsonify({'success': False, 'error': f"OpenRouter API Error (Step 2): {response_2.status_code} - {response_2.text}"}), 500
+
+        resp_json_2 = response_2.json()
+        if 'choices' not in resp_json_2 or not resp_json_2['choices']:
+            return jsonify({'success': False, 'error': 'No response from AI (Step 2)'}), 500
+            
+        final_content = resp_json_2['choices'][0]['message']['content']
+        
+        return jsonify({
+            'success': True, 
+            'message': final_content
+        })
+        
+    except Exception as e:
+        print(f"Chat API Error: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
         
     except Exception as e:
         print(f"Chat API Error: {e}")
