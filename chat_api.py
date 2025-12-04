@@ -96,7 +96,7 @@ def chat_stream():
             try:
                 # Stream the response with GPT-4o
                 stream = client.chat.completions.create(
-                    model="openai/gpt-4o",
+                    model="openai/gpt-oss-20b:free",
                     messages=messages,
                     stream=True
                 )
