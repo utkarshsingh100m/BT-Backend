@@ -9,39 +9,60 @@ from openai import OpenAI
 import os
 import json
 from dotenv import load_dotenv
-import sqlite3
+import boto3
+from botocore.exceptions import ClientError
 
 # Load environment variables
-load_dotenv()
+load_dotenv(os.path.join(os.path.dirname(__file__), '.env'))
 
 app = Flask(__name__)
 CORS(app)
 
-# Database setup
-DB_NAME = os.path.join(os.path.dirname(__file__), "contact.db")
+# DynamoDB setup
+DYNAMODB_TABLE = "Contacts"
+dynamodb = None
+table = None
 
-def init_db():
-    """Initialize the database with contact table"""
+def init_dynamodb():
+    """Initialize DynamoDB connection and table"""
+    global dynamodb, table
     try:
-        conn = sqlite3.connect(DB_NAME)
-        c = conn.cursor()
-        c.execute('''
-            CREATE TABLE IF NOT EXISTS contacts (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                name TEXT NOT NULL,
-                email TEXT NOT NULL,
-                message TEXT NOT NULL,
-                timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
-            )
-        ''')
-        conn.commit()
-        conn.close()
-        print(f"Database {DB_NAME} initialized successfully")
+        dynamodb = boto3.resource('dynamodb', region_name=os.getenv('AWS_DEFAULT_REGION', 'us-east-1'))
+        
+        try:
+            # Check if table exists
+            table = dynamodb.Table(DYNAMODB_TABLE)
+            table.load()
+            print(f"DynamoDB table {DYNAMODB_TABLE} found")
+        except ClientError as e:
+            if e.response['Error']['Code'] == 'ResourceNotFoundException':
+                # Create table if it doesn't exist
+                print(f"Creating DynamoDB table {DYNAMODB_TABLE}...")
+                table = dynamodb.create_table(
+                    TableName=DYNAMODB_TABLE,
+                    KeySchema=[
+                        {'AttributeName': 'email', 'KeyType': 'HASH'},  # Partition key
+                        {'AttributeName': 'timestamp', 'KeyType': 'RANGE'}  # Sort key
+                    ],
+                    AttributeDefinitions=[
+                        {'AttributeName': 'email', 'AttributeType': 'S'},
+                        {'AttributeName': 'timestamp', 'AttributeType': 'S'}
+                    ],
+                    ProvisionedThroughput={
+                        'ReadCapacityUnits': 5,
+                        'WriteCapacityUnits': 5
+                    }
+                )
+                table.wait_until_exists()
+                print(f"DynamoDB table {DYNAMODB_TABLE} created successfully")
+            else:
+                raise e
+                
     except Exception as e:
-        print(f"Database initialization error: {e}")
+        print(f"DynamoDB initialization error: {e}")
 
-# Initialize DB on startup
-init_db()
+# Initialize DynamoDB on startup
+init_dynamodb()
 
 # Initialize OpenAI client with OpenRouter
 client = OpenAI(
@@ -117,12 +138,20 @@ def save_contact():
         if not all([name, email, message]):
             return jsonify({'success': False, 'error': 'All fields are required'}), 400
             
-        conn = sqlite3.connect(DB_NAME)
-        c = conn.cursor()
-        c.execute('INSERT INTO contacts (name, email, message) VALUES (?, ?, ?)',
-                 (name, email, message))
-        conn.commit()
-        conn.close()
+        from datetime import datetime
+        timestamp = datetime.utcnow().isoformat()
+        
+        if table:
+            table.put_item(
+                Item={
+                    'name': name,
+                    'email': email,
+                    'message': message,
+                    'timestamp': timestamp
+                }
+            )
+        else:
+             raise Exception("DynamoDB table not initialized")
         
         return jsonify({'success': True, 'message': 'Message sent successfully'})
         
@@ -136,11 +165,15 @@ def health_check():
     api_key_status = 'Configured' if os.getenv('OPENROUTER_API_KEY') else 'Missing'
     
     # Check DB connection
+    # Check DB connection
     db_status = 'Error'
     try:
-        conn = sqlite3.connect(DB_NAME)
-        conn.close()
-        db_status = 'Connected'
+        if table:
+            # Lightweight check
+            table.load()
+            db_status = 'Connected'
+        else:
+            db_status = 'Not Initialized'
     except:
         pass
         
